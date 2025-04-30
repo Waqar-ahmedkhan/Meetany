@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>WebRTC Video Call</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+
+        #local-video,
+        #remote-video {
+            border: 1px solid black;
+            width: 320px;
+            height: 240px;
+            margin: 10px;
+        }
+
+        #join-call-btn,
+        #leave-call-btn {
+            padding: 10px 20px;
+            margin: 10px;
+            font-size: 16px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>WebRTC Video Call</h1>
+    <video id="local-video" autoplay playsinline muted></video>
+    <video id="remote-video" autoplay playsinline></video>
+    <br>
+    <button id="join-call-btn">Join Call</button>
+    <button id="leave-call-btn">Leave Call</button>
+    <button id="answer-call-btn" style="display: none;">Answer Call</button>
+
+    <!-- Updated Socket.IO version for better compatibility -->
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.3.0/socket.io.js"
+        integrity="sha512-v8ng/uGxkge3d1IJuEo6dJP8JViyvms0cly9pnbfRxT6/31c3dRWxIiwGnMSWwZjHKOuY3EVmijs7k1jz/9bLA=="
+        crossorigin="anonymous"></script>
+
+    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.3.0/socket.io.js"
+    integrity="sha512-v8ng/uGxkge3d1IJuEo6dJP8JViyvms0cly9pnbfRxT6/31c3dRWxIiwGnMSWwZjHKOuY3EVmijs7k1jz/9bLA=="
+    crossorigin="anonymous"></script>  -->
+    <script>
+        const socketUrl = "https://meetany.app/";
+        const socket = io(socketUrl, {
+            path: '/socket.io',
+            transports: ['polling'],
+        });
+
+        const localVideo = document.getElementById('local-video');
+        const remoteVideo = document.getElementById('remote-video');
+        const joinCallBtn = document.getElementById('join-call-btn');
+        const leaveCallBtn = document.getElementById('leave-call-btn');
+        // Add answer call button
+     /*   const answerCallBtn = document.getElementById('answer-call-btn');
+
+        // Answer call button event listener
+        answerCallBtn.addEventListener('click', () => {
+            socket.emit('answer');
+        }); */
+
+        let pc = null;
+        let localStream = null;
+        let isOfferer = false;
+        let candidateQueue = [];
+        let userId;
+
+        socket.on('connect', () => {
+            console.log('Connected to socket server:', socket.connected); // true
+            userId = socket.id;
+            console.log('userId:>> ', userId);
+            //   socket.emit('new-user', userId);
+        });
+
+        // Get user media (camera and microphone)
+        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+            .then((stream) => {
+                localStream = stream;
+                localVideo.srcObject = stream;
+            })
+            .catch((error) => {
+                console.error('Error getting user media:', error);
+            });
+
+        // Function to create a peer connection
+        function createPeerConnection() {
+            if (!pc) {
+                const configuration = {
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                };
+                pc = new RTCPeerConnection(configuration);
+
+                // Add local stream tracks to the peer connection
+                localStream.getTracks().forEach(track => {
+                    pc.addTrack(track, localStream);
+                });
+
+                // Handle ICE candidates
+                pc.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        socket.emit('ice-candidate', event.candidate);
+                    }
+                };
+
+                // Handle remote stream
+                pc.ontrack = (event) => {
+                    remoteVideo.srcObject = event.streams[0];
+                };
+
+                // Handle connection state changes
+                pc.onconnectionstatechange = (event) => {
+                    console.log('Connection state change:', pc.connectionState);
+                };
+            }
+        }
+
+        // Function to add queued ICE candidates after the remote description is set
+        function addQueuedCandidates() {
+            candidateQueue.forEach(candidate => {
+                pc.addIceCandidate(new RTCIceCandidate(candidate))
+                    .catch(e => console.error('Error adding received ICE candidate', e));
+            });
+            candidateQueue = []; // Clear the queue once candidates are added
+        }
+
+        // Handle socket.io events
+        socket.on('call-notification', (data) => {
+            console.log('Received call notification>>>>>>>>>', data);
+            if (userId !== data) {
+                console.log('Received call notification:', data);
+                // Display call notification to user
+                // alert(data);
+                // Show answer call button
+              //  answerCallBtn.style.display = 'block';
+                // a confirm dialog to answer the call
+                if (confirm('Do you want to answer the call?')) {
+                    console.log('Call accepted');
+                    socket.emit('answer-call');
+
+                } else {
+                    alert('Call rejected');
+                }
+
+            }
+        });
+
+        // Handle socket.io events
+        socket.on('new-user-joined', (data) => {
+            console.log('New user joined the call');
+            console.log('IsoffererBefore:>> ', isOfferer);
+            createPeerConnection();
+            console.log('Isofferer:>> ', isOfferer);
+            console.log('pc.signalingState:>> ', pc.signalingState);
+            // isOfferer = true;
+            if (isOfferer && pc.signalingState === 'stable') {
+                // Create offer only if we are the offerer and signaling state is stable
+                pc.createOffer()
+                    .then((offer) => {
+                        return pc.setLocalDescription(offer);
+                    })
+                    .then(() => {
+                        socket.emit('offer', pc.localDescription);
+                    })
+                    .catch((error) => {
+                        console.error('Error creating or sending offer:', error);
+                    });
+            }
+        });
+
+        socket.on('offer', (data) => {
+            console.log('Received offer');
+            if (!pc) {
+                createPeerConnection();
+            }
+
+            // Set the remote description only if signaling state is correct
+            if (pc.signalingState === 'stable') {
+                pc.setRemoteDescription(new RTCSessionDescription(data))
+                    .then(() => {
+                        return pc.createAnswer();
+                    })
+                    .then((answer) => {
+                        return pc.setLocalDescription(answer);
+                    })
+                    .then(() => {
+                        socket.emit('answer', pc.localDescription);
+                        addQueuedCandidates(); // Add any queued ICE candidates
+                    })
+                    .catch((error) => {
+                        console.error('Error handling offer or creating answer:', error);
+                    });
+            } else {
+                //  socket.emit('answer', { type: '' }); 
+                console.warn('Cannot set offer because signaling state is not stable:', pc.signalingState);
+            }
+        });
+
+        socket.on('answer', (data) => {
+            console.log('Received answer');
+
+            // createPeerConnection();
+
+            // Set remote description only if signaling state allows it
+            if (pc.signalingState === 'have-local-offer') {
+                pc.setRemoteDescription(new RTCSessionDescription(data))
+                    .then(() => {
+                        addQueuedCandidates(); // Add any queued ICE candidates
+                    })
+                    .catch((error) => {
+                        console.error('Error setting remote description with answer:', error);
+                    });
+            } else {
+                console.log("havelocalState")
+                console.warn('Cannot set answer because signaling state is:', pc.signalingState);
+            }
+        });
+
+        socket.on('ice-candidate', (data) => {
+            console.log('Received ICE candidate');
+            if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+                pc.addIceCandidate(new RTCIceCandidate(data))
+                    .catch((error) => {
+                        console.error('Error adding received ICE candidate:', error);
+                    });
+            } else {
+                candidateQueue.push(data); // Queue the ICE candidates until the remote description is set
+            }
+        });
+
+        // Join call button event listener
+        joinCallBtn.addEventListener('click', () => {
+            socket.emit('join-call', userId);
+            isOfferer = true;
+        });
+
+        // Leave call button event listener
+        leaveCallBtn.addEventListener('click', () => {
+            socket.emit('leave-call');
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            localVideo.srcObject = null;
+            remoteVideo.srcObject = null;
+        });
+    </script>
+</body>
+
+</html>
