@@ -109,14 +109,29 @@ export const reportUser = async (req, res) => {
 };
 
 
-
 export const getMyReports = async (req, res) => {
   try {
     const user_id = req.user;
 
-    const reports = await Report.find({ user_id })
+    let reports = await Report.find({ user_id })
       .populate('reported_user_id', 'name age gender image country')
       .sort({ createdAt: -1 });
+
+    // Ensure all fields are present (even if null)
+    reports = reports.map(report => {
+      const reported = report.reported_user_id || {};
+      return {
+        ...report._doc,
+        reported_user_id: {
+          _id: reported._id || null,
+          name: reported.name || null,
+          age: reported.age || null,
+          gender: reported.gender || null,
+          image: typeof reported.image !== 'undefined' ? reported.image : null,
+          country: reported.country || null,
+        }
+      };
+    });
 
     res.status(200).json({ status: 200, message: 'Report list fetched successfully', data: reports });
   } catch (error) {
@@ -124,6 +139,7 @@ export const getMyReports = async (req, res) => {
     res.status(500).json({ status: 500, message: "Internal server error." });
   }
 };
+
 
 
 
