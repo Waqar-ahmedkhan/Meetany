@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Socket.IO Signaling Test Client</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body { font-family: sans-serif; }
+    #messages { list-style: none; padding: 0; max-height: 300px; overflow-y: auto; border: 1px solid #ccc; margin-bottom: 10px; }
+    #messages li { padding: 5px; border-bottom: 1px solid #eee; }
+    #messages li:last-child { border-bottom: none; }
+    .sent { color: blue; }
+    .received { color: green; }
+    .info { color: gray; }
+    .error { color: red; font-weight: bold; }
+    button { margin-top: 5px; }
+    input { margin-bottom: 5px; padding: 5px; }
+    label { display: inline-block; width: 100px; margin-bottom: 5px; }
+  </style>
+</head>
+<body>
+  <h1>Socket.IO Signaling Test Client</h1>
+
+  <div>
+    <label for="serverUrl">Server URL:</label>
+    <input type="text" id="serverUrl" value="http://localhost:3000" style="width: 200px;">
+    <button onclick="connectSocket()">Connect</button>
+    <button onclick="disconnectSocket()" disabled>Disconnect</button>
+    <span id="connectionStatus" style="margin-left: 10px; color: red;">Disconnected</span>
+  </div>
+
+  <div id="userDetails" style="margin-top: 20px;">
+      <h2>User Details (for store_user)</h2>
+      <label for="uniqueID">Unique ID:</label>
+      <input type="text" id="uniqueID" value="user123"><br>
+      <label for="userName">Name:</label>
+      <input type="text" id="userName" value="Test User 1"><br>
+      <label for="userGender">Gender:</label>
+      <input type="text" id="userGender" value="male"><br>
+      <button onclick="storeUser()" disabled>Store User (Simulate Login)</button>
+  </div>
+
+  <div id="callControls" style="margin-top: 20px;">
+      <h2>Simulate Signaling</h2>
+      <p>Use these after 'Store User' for at least two clients.</p>
+      <label for="targetUniqueID">Target User ID:</label>
+      <input type="text" id="targetUniqueID" value=""><br>
+       <label for="currentCallId">Current Call ID:</label>
+       <input type="text" id="currentCallId" value="" readonly><br>
+
+
+      <button onclick="simulateCreateOffer()" disabled>Simulate create_offer</button>
+      <button onclick="simulateCreateAnswer()" disabled>Simulate create_answer</button>
+      <button onclick="simulateIceCandidate()" disabled>Simulate ice_candidate</button>
+      <button onclick="simulateEndCall()" disabled>Simulate call_ended</button>
+       <button onclick="simulateCallMissed()" disabled>Simulate call_missed</button>
+       <button onclick="simulateCallRejected()" disabled>Simulate call_rejected</button>
+  </div>
+
+  <h2>Messages</h2>
+  <ul id="messages">
+    <li class="info">Waiting for connection...</li>
+  </ul>
+
+  <script>
+    let socket;
+    const messagesList = document.getElementById('messages');
+    const connectionStatus = document.getElementById('connectionStatus');
+    const connectBtn = document.querySelector('#container button:nth-of-type(1)');
+    const disconnectBtn = document.querySelector('#container button:nth-of-type(2)');
+    const storeUserBtn = document.getElementById('userDetails').querySelector('button');
+    const callControlBtns = document.getElementById('callControls').querySelectorAll('button');
+
+    const uniqueIDInput = document.getElementById('uniqueID');
+    const userNameInput = document.getElementById('userName');
+    const userGenderInput = document.getElementById('userGender');
+    const targetUniqueIDInput = document.getElementById('targetUniqueID');
+     const currentCallIdInput = document.getElementById('currentCallId');
+
+
+    function logMessage(message, type = 'info') {
+      const li = document.createElement('li');
+      li.classList.add(type);
+      // Attempt to pretty print JSON if possible
+      try {
+          const data = JSON.parse(message);
+           li.textContent = `[${new Date().toLocaleTimeString()}] ${type.toUpperCase()}: ${JSON.stringify(data, null, 2)}`;
+      } catch {
+           li.textContent = `[${new Date().toLocaleTimeString()}] ${type.toUpperCase()}: ${message}`;
+      }
+
+      messagesList.appendChild(li);
+      messagesList.scrollTop = messagesList.scrollHeight; // Auto-scroll to bottom
+    }
+
+    function setButtonState(isConnected) {
+        connectBtn.disabled = isConnected;
+        disconnectBtn.disabled = !isConnected;
+        storeUserBtn.disabled = !isConnected;
+        callControlBtns.forEach(btn => btn.disabled = !isConnected);
+    }
+
+
+    function connectSocket() {
+      const serverUrl = document.getElementById('serverUrl').value;
+      logMessage(`Attempting to connect to ${serverUrl}`, 'info');
+
+      // Pass query parameters if your server requires them (e.g., for auth)
+      // let options = { query: "token=abc" };
+      // socket = io(serverUrl, options);
+
+       socket = io(serverUrl); // Simple connection for testing
+
+      socket.on('connect', () => {
+        logMessage('Socket Connected!', 'info');
+        connectionStatus.textContent = 'Connected';
+        connectionStatus.style.color = 'green';
+        setButtonState(true);
+      });
+
+      socket.on('message', (msg) => {
+        logMessage(`Received: ${JSON.stringify(msg)}`, 'received');
+
+         // Handle specific received messages
+         if (msg.type === 'call_connected') {
+             // When a call is connected (either initiated by this client or found a partner)
+             const partnerId = msg.data; // This is the uniqueID of the partner
+             const partnerName = msg.name || 'Unknown Partner';
+             const partnerGender = msg.gender || 'unknown';
+             const callId = msg.callId;
+
+             if (partnerId && partnerId !== "No available user for the call") {
+                logMessage(`Call Connected! Partner: ${partnerName} (${partnerId}, ${partnerGender}). Call ID: ${callId}`, 'info');
+                targetUniqueIDInput.value = partnerId; // Set the target for signaling buttons
+                currentCallIdInput.value = callId || ''; // Store the current call ID
+
+             } else {
+                 logMessage('No available user found for a call at this moment.', 'info');
+                 targetUniqueIDInput.value = ''; // Clear target if no user found
+                 currentCallIdInput.value = ''; // Clear call ID
+             }
+         } else if (msg.type === 'call_incoming') {
+             // When another user found *this* client
+             const callerId = msg.data; // This is the uniqueID of the caller
+              const callerName = msg.name || 'Unknown Caller';
+              const callerGender = msg.gender || 'unknown';
+               const callId = msg.callId;
+
+             logMessage(`Incoming Call! Caller: ${callerName} (${callerId}, ${callerGender}). Call ID: ${callId}`, 'info');
+             targetUniqueIDInput.value = callerId; // Set the target for signaling buttons
+             currentCallIdInput.value = callId || ''; // Store the current call ID
+
+         } else if (msg.type === 'offer_received') {
+             // Received an offer from the other participant
+              logMessage('Received Offer.', 'info');
+             // In a real app, you would set the remote description here.
+             // For testing, we just log it and potentially trigger sending an answer.
+              targetUniqueIDInput.value = msg.uniqueID; // Sender of offer is the target
+              currentCallIdInput.value = msg.callId || ''; // Store call ID from offer
+
+         } else if (msg.type === 'answer_received') {
+             // Received an answer from the other participant
+              logMessage('Received Answer.', 'info');
+              // In a real app, you would set the remote description here.
+
+         } else if (msg.type === 'ice_candidate') {
+             // Received an ICE candidate from the other participant
+              logMessage('Received ICE Candidate.', 'info');
+               // In a real app, you would add the ICE candidate to the peer connection.
+
+         } else if (msg.type === 'call_ended') {
+             logMessage(`Call ended by other user. Call ID: ${msg.callId}`, 'info');
+              targetUniqueIDInput.value = ''; // Clear target
+             currentCallIdInput.value = ''; // Clear call ID
+
+             // If the server sends a new call_connected after ending, it will update
+             // Otherwise, the user might need to click 'Store User' again to search.
+
+         } else if (msg.type === 'call_ended_disconnect') {
+              logMessage(`Call ended because other user disconnected. Call ID: ${msg.callId}`, 'info');
+               targetUniqueIDInput.value = ''; // Clear target
+              currentCallIdInput.value = ''; // Clear call ID
+              // Server should automatically find a new user here and send call_connected/call_incoming
+
+         } else if (msg.type === 'call_blocked') {
+             logMessage('Call blocked by user.', 'error');
+             targetUniqueIDInput.value = ''; // Clear target
+             currentCallIdInput.value = ''; // Clear call ID
+              // Server should automatically find a new user here and send call_connected
+
+         } else if (msg.type === 'user_not_online') {
+              logMessage('Target user not online.', 'error');
+              targetUniqueIDInput.value = ''; // Clear target
+              currentCallIdInput.value = ''; // Clear call ID
+               // Server should automatically find a new user here and send call_connected
+         }
+          // Add more cases for other message types if needed
+
+      });
+
+      socket.on('disconnect', (reason) => {
+        logMessage(`Socket Disconnected: ${reason}`, 'info');
+        connectionStatus.textContent = 'Disconnected';
+        connectionStatus.style.color = 'red';
+        setButtonState(false);
+         targetUniqueIDInput.value = ''; // Clear target
+         currentCallIdInput.value = ''; // Clear call ID
+      });
+
+      socket.on('error', (err) => {
+        logMessage(`Socket Error: ${JSON.stringify(err)}`, 'error');
+      });
+
+      // Optional: Handle socket.io-specific events like 'connect_error'
+       socket.on('connect_error', (err) => {
+         logMessage(`Socket Connection Error: ${err.message}`, 'error');
+         connectionStatus.textContent = 'Connection Failed';
+         connectionStatus.style.color = 'red';
+         setButtonState(false);
+          targetUniqueIDInput.value = ''; // Clear target
+          currentCallIdInput.value = ''; // Clear call ID
+       });
+    }
+
+    function disconnectSocket() {
+      if (socket && socket.connected) {
+        socket.disconnect();
+        logMessage('Socket Disconnected by user action', 'info');
+      }
+    }
+
+    function storeUser() {
+        if (!socket || !socket.connected) {
+             logMessage('Socket not connected!', 'error');
+             return;
+         }
+         const uniqueID = uniqueIDInput.value;
+         const name = userNameInput.value;
+         const gender = userGenderInput.value;
+
+         if (!uniqueID || !name || !gender) {
+              logMessage('Please fill in Unique ID, Name, and Gender', 'error');
+              return;
+         }
+
+        const message = {
+            type: 'store_user',
+            uniqueID: uniqueID,
+            name: name,
+            gender: gender
+        };
+        socket.send(JSON.stringify(message));
+        logMessage(`Sent: ${JSON.stringify(message)}`, 'sent');
+    }
+
+
+    // --- Signaling Simulation Functions ---
+    // These functions simulate sending signaling messages.
+    // In a real WebRTC app, the RTCPeerConnection API would generate the SDPs and Candidates.
+
+    function simulateCreateOffer() {
+       if (!socket || !socket.connected) { logMessage('Socket not connected!', 'error'); return; }
+        const targetUniqueId = targetUniqueIDInput.value;
+        const myUniqueId = uniqueIDInput.value;
+         const callId = currentCallIdInput.value;
+
+        if (!targetUniqueId || !callId) {
+            logMessage('Target User ID and Current Call ID must be set by a connected call.', 'error');
+            return;
+        }
+
+        // Simulate a basic SDP Offer (structure based on WebRTC)
+        const sdpOffer = {
+            sdp: 'Simulated Offer SDP...', // Replace with a realistic structure if needed
+            type: 'offer'
+        };
+
+        const message = {
+            type: 'create_offer',
+            uniqueID: targetUniqueId, // Server expects the target's uniqueID here
+            callerId: myUniqueId,     // The sender's uniqueID (caller)
+            targetId: targetUniqueId, // The target's uniqueID (receiver) - Redundant but matches your server code
+             callId: callId,           // The ID of the current call
+            data: sdpOffer
+        };
+        socket.send(JSON.stringify(message));
+        logMessage(`Sent: ${JSON.stringify(message)}`, 'sent');
+    }
+
+    function simulateCreateAnswer() {
+       if (!socket || !socket.connected) { logMessage('Socket not connected!', 'error'); return; }
+         const targetUniqueId = targetUniqueIDInput.value;
+        const myUniqueId = uniqueIDInput.value;
+         const callId = currentCallIdInput.value;
+
+        if (!targetUniqueId || !callId) {
+            logMessage('Target User ID and Current Call ID must be set by a connected call.', 'error');
+            return;
+        }
+
+         // Simulate a basic SDP Answer (structure based on WebRTC)
+        const sdpAnswer = {
+            sdp: 'Simulated Answer SDP...', // Replace with a realistic structure if needed
+            type: 'answer'
+        };
+
+        const message = {
+            type: 'create_answer',
+            uniqueID: targetUniqueId, // Server expects the target's uniqueID here (the caller's uniqueID)
+            callerId: targetUniqueId, // The caller's uniqueID
+            data: sdpAnswer,
+             callId: callId            // The ID of the current call
+        };
+        socket.send(JSON.stringify(message));
+        logMessage(`Sent: ${JSON.stringify(message)}`, 'sent');
+    }
+
+    function simulateIceCandidate() {
+        if (!socket || !socket.connected) { logMessage('Socket not connected!', 'error'); return; }
+         const targetUniqueId = targetUniqueIDInput.value;
+        const myUniqueId = uniqueIDInput.value;
+         const callId = currentCallIdInput.value;
+
+
+        if (!targetUniqueId || !callId) {
+            logMessage('Target User ID and Current Call ID must be set by a connected call.', 'error');
+            return;
+        }
+
+        // Simulate an ICE Candidate (structure based on WebRTC)
+        const iceCandidate = {
+             sdpMLineIndex: 0, // Example data
+             sdpMid: 'video', // Example data
+             sdpCandidate: 'candidate:...' // Example data
+        };
+
+        const message = {
+            type: 'ice_candidate',
+            uniqueID: targetUniqueId, // Server expects the target's uniqueID here
+            senderId: myUniqueId,    // The sender's uniqueID
+            data: iceCandidate,
+            // Note: Your server's ice_candidate handler doesn't seem to use callId currently,
+            // but including it is good practice for a real app.
+            // callId: callId
+        };
+        socket.send(JSON.stringify(message));
+        logMessage(`Sent: ${JSON.stringify(message)}`, 'sent');
+    }
+
+     function simulateEndCall() {
+         if (!socket || !socket.connected) { logMessage('Socket not connected!', 'error'); return; }
+         const myUniqueId = uniqueIDInput.value;
+         const callId = currentCallIdInput.value;
+
+          if (!myUniqueId || !callId) {
+             logMessage('Unique ID and Current Call ID must be set.', 'error');
+             return;
+         }
+
+         const message = {
+             type: 'call_ended',
+             uniqueID: myUniqueId, // The user who is ending the call
+             callId: callId       // The ID of the call being ended
+         };
+         socket.send(JSON.stringify(message));
+         logMessage(`Sent: ${JSON.stringify(message)}`, 'sent');
+
+          // Clear call details immediately on the client side
+          targetUniqueIDInput.value = '';
+          currentCallIdInput.value = '';
+     }
+
+      function simulateCallMissed() {
+          if (!socket || !socket.connected) { logMessage('Socket not connected!', 'error'); return; }
+           const myUniqueId = uniqueIDInput.value;
+           const callId = currentCallIdInput.value;
+
+            if (!myUniqueId || !callId) {
+               logMessage('Unique ID and Current Call ID must be set.', 'error');
+               return;
+           }
+
+           const message = {
+               type: 'call_missed',
+               uniqueID: myUniqueId, // The user who missed the call (the receiver)
+               callId: callId       // The ID of the call that was missed
+           };
+           socket.send(JSON.stringify(message));
+           logMessage(`Sent: ${JSON.stringify(message)}`, 'sent');
+
+            // Clear call details immediately on the client side
+            targetUniqueIDInput.value = '';
+            currentCallIdInput.value = '';
+      }
+
+       function simulateCallRejected() {
+           if (!socket || !socket.connected) { logMessage('Socket not connected!', 'error'); return; }
+            const myUniqueId = uniqueIDInput.value;
+            const callId = currentCallIdInput.value;
+
+             if (!myUniqueId || !callId) {
+                logMessage('Unique ID and Current Call ID must be set.', 'error');
+                return;
+            }
+
+            const message = {
+                type: 'call_rejected',
+                uniqueID: myUniqueId, // The user who is rejecting the call (the receiver)
+                callId: callId       // The ID of the call being rejected
+            };
+            socket.send(JSON.stringify(message));
+            logMessage(`Sent: ${JSON.stringify(message)}`, 'sent');
+
+             // Clear call details immediately on the client side
+             targetUniqueIDInput.value = '';
+             currentCallIdInput.value = '';
+       }
+
+
+  </script>
+</body>
+</html>
