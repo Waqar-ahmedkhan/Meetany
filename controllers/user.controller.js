@@ -7,6 +7,7 @@ import { Like } from "../models/Like.js";
 import { Subscription } from "../models/Subscription.js";
 import mongoose from "mongoose";
 import crypto from "crypto";
+import router from "../routes/userRoutes.js";
 
 // Helper function to generate unique user code
 async function generateUserCode() {
@@ -75,14 +76,108 @@ async function getUserCurrentStars(userId) {
   }
 }
 
+export const registerUser = async (req, res) => {
+  try {
+    const {
+      name,
+      age,
+      gender,
+      relationship_goal,
+      refferal_code,
+      device_id,
+      device_type,
+      device_token,
+      country,
+      mail
+    } = req.body;
+
+    // Validate required fields
+    const requiredFields = { name, age, gender, relationship_goal, device_id, device_type, device_token, country, mail };
+    for (const [field, value] of Object.entries(requiredFields)) {
+      if (!value) {
+        return res.status(400).json({ status: 403, message: `${field} field is required` });
+      }
+    }
+
+    // Check if user with device_id exists and clean up data
+    const existingUser = await User.findOne({ device_id });
+    if (existingUser) {
+      const userId = existingUser._id;
+
+      await Promise.all([
+        CallHistory.deleteMany({ $or: [{ caller: userId }, { receiver: userId }] }),
+        Block.deleteMany({ $or: [{ user_id: userId }, { blocked_user_id: userId }] }),
+        Report.deleteMany({ $or: [{ user_id: userId }, { reported_user_id: userId }] }),
+        User.deleteOne({ device_id }),
+      ]);
+    }
+
+    const user_code = await generateUserCode();
+
+    const newUser = new User({
+      name,
+      age,
+      gender,
+      mail,
+      relationship_goal,
+      refferal_code,
+      device_id,
+      device_type,
+      device_token,
+      country,
+      user_type: "user",
+      user_code
+    });
+
+    const userRecord = await newUser.save();
+
+    // Referral subscription logic
+    if (userRecord.refferal_code) {
+      const referrer = await User.findOne({ user_code: userRecord.refferal_code });
+      if (referrer) {
+        const referralSubscription = new Subscription({
+          type: "referral",
+          cost: 0,
+          stars: 10,
+          user_id: referrer._id,
+          referral_user_id: userRecord._id,
+          planName: null,
+        });
+        await referralSubscription.save();
+      }
+    }
+
+    const token = jwt.sign(
+      { userId: userRecord._id },
+      process.env.SECRET_KEY,
+      { expiresIn: '365d' }
+    );
+
+    return res.status(201).json({
+      status: 200,
+      message: 'User signed up successfully',
+      data: userRecord,
+      token
+    });
+
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ status: 500, message: `Server Error: ${err.message}` });
+  }
+};
+
+
 // Sign up new user
 export const signup = async (req, res) => {
   try {
-    const { name, age, gender, relationship_goal, refferal_code, device_id, device_type, device_token, country } = req.body; 
+    const { name, age, gender, relationship_goal, refferal_code, device_id, device_type, device_token, country, mail } = req.body; 
     
     // Validate required fields
     if (!name) {
       return res.status(400).json({ status: 403, message: 'name field is required' });
+    }
+    if(!mail) { 
+      return res.status(400).json({ status: 403, message: 'mail field is required' });
     }
     if (!age) {
       return res.status(400).json({ status: 403, message: 'age field is required' });
@@ -144,12 +239,15 @@ export const signup = async (req, res) => {
     var rec = { 
       name, 
       age, 
-      gender, 
+      gender,
+      mail, 
       relationship_goal, 
       refferal_code, 
       device_id, 
       device_type, 
       device_token, 
+      mail,
+      user_type: "user",
       country,
       user_code: userCode 
     }; 
@@ -247,7 +345,8 @@ export const deleteUser = async (req, res) => {
 // Update user profile
 export const updateProfile = async (req, res) => {
   try {
-    const { name, age, gender, bio, image, country } = req.body; 
+    const { name, age, gender, bio, image, country, mail } = req.body;
+    
     const user_id = req.user;
     
     // Define fields to update
@@ -258,19 +357,40 @@ export const updateProfile = async (req, res) => {
     if (bio) updateData.bio = bio;
     if (image) updateData.image = image;
     if (country) updateData.country = country;
-
+    if (mail) updateData.mail = mail;
+    
     // Update the user document
     const updatedUser = await User.findByIdAndUpdate(user_id, updateData, {
       new: true, // Return the updated document
       runValidators: true, // Validate the new fields
     });
-
+    
     if (!updatedUser) {
       return res.status(404).json({ status: 404, message: "User not found." });
     }
-
-    res.status(200).json({ status: 200, message: "User profile updated successfully.", user: updatedUser });
+    
+    res.status(200).json({ 
+      status: 200, 
+      message: "User profile updated successfully.", 
+      user: updatedUser 
+    });
   } catch (error) {
+    // Handle duplicate email error
+    if (error.code === 11000 && error.keyPattern && error.keyPattern.mail) {
+      return res.status(400).json({ 
+        status: 400, 
+        message: "Email already exists. Please use a different email address." 
+      });
+    }
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        status: 400, 
+        message: error.message 
+      });
+    }
+    
     console.error("Error updating user profile:", error);
     res.status(500).json({ status: 500, message: "Internal server error." });
   }
@@ -353,10 +473,15 @@ export const getProfile = async (req, res) => {
 // Get another user's profile
 export const getUserProfile = async (req, res) => {
   try {
-    const { user_id } = req.body;
+    const { user_id, mail } = req.body;
     
+    // Check if both user_id and mail are provided
     if (!user_id) {
-      return res.status(400).json({ status: 403, message: "user_id is required." });
+      return res.status(400).json({ status: 400, message: "user_id is required." });
+    }
+    
+    if (!mail) {
+      return res.status(400).json({ status: 400, message: "mail is required." });
     }
     
     const loggedInUserId = req.user;
@@ -364,19 +489,22 @@ export const getUserProfile = async (req, res) => {
     const totalLikes = await Like.countDocuments({ liked_user_id: user_id });
     const isLikedByLoggedInUser = await Like.exists({ user_id: loggedInUserId, liked_user_id: user_id });
     
-    // Find the user by ID
-    const user = await User.findById(user_id).select('-device_token'); // Exclude fields if needed
-
+    // Find the user by ID and mail for additional verification
+    const user = await User.findOne({ 
+      _id: user_id, 
+      mail: mail 
+    }).select('-device_token'); // Exclude fields if needed
+    
     if (!user) {
-      return res.status(404).json({ status: 404, message: "User not found." });
+      return res.status(404).json({ status: 404, message: "User not found or mail doesn't match." });
     }
-
-    res.status(200).json({ 
-      status: 200, 
+    
+    res.status(200).json({
+      status: 200,
       message: 'User Profile Detail',
-      user, 
-      totalLikes, 
-      isLikedByLoggedInUser: !!isLikedByLoggedInUser 
+      user,
+      totalLikes,
+      isLikedByLoggedInUser: !!isLikedByLoggedInUser
     });
   } catch (error) {
     console.error("Error fetching user profile:", error);
@@ -384,7 +512,7 @@ export const getUserProfile = async (req, res) => {
   }
 };
 
-// Get user list
+// Get Fser list
 export const getUserList = async (req, res) => {
   try {
     const id = req.user;
@@ -512,5 +640,34 @@ export const setFilterOption = async (req, res) => {
   } catch (err) {
     console.log(err);
     return res.status(500).send(`Server Error\n${err}`);
+  }
+};
+
+// controllers/user.controller.js
+
+
+export const getUserByMail = async (req, res) => {
+  try {
+    const { mail } = req.params;
+
+    if (!mail) {
+      return res.status(400).json({ status: 400, message: 'Email is required.' });
+    }
+
+    // Use findOne to get user by mail
+    const user = await User.findOne({ mail: mail.toLowerCase().trim() }).select('-device_token');
+
+    if (!user) {
+      return res.status(404).json({ status: 404, message: 'User not found.' });
+    }
+
+    res.status(200).json({
+      status: 200,
+      message: 'User fetched successfully.',
+      user
+    });
+  } catch (error) {
+    console.error('Error fetching user by mail:', error);
+    res.status(500).json({ status: 500, message: 'Internal server error.' });
   }
 };

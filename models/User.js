@@ -2,17 +2,27 @@ import { Schema, model } from 'mongoose';
 import dotenv from 'dotenv';
 dotenv.config();
 import jwt from 'jsonwebtoken';
+
 const schemaOptions = {
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
 };
+
 const UserSchema = new Schema({
   name: {
     type: String,
     required: false,
   },
+  mail: {
+    type: String,
+    required: true,
+    unique: true,
+    lowercase: true,
+    trim: true,
+    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email address']
+  },
   age: {
-	type: Date,
-	required: true
+    type: Date,
+    required: true
   },
   gender: {
     type: String,
@@ -30,7 +40,7 @@ const UserSchema = new Schema({
     type: String,
     required: false,
   },
-  looking_for: { 
+  looking_for: {
     type: String,
     default: "both",
   },
@@ -40,11 +50,11 @@ const UserSchema = new Schema({
   },
   image: {
     type: String,
-    required: false,  
+    required: false,
   },
-  country: { 
+  country: {
     type: String,
-    required: false,  
+    required: false,
   },
   bio: {
     type: String,
@@ -63,13 +73,16 @@ const UserSchema = new Schema({
     required: false,
   },
 }, schemaOptions);
+
 UserSchema.methods = {
   jwtToken() {
     return jwt.sign(
       { id: this._id },
-      process.env.JWT_SECRET,{expiresIn:'24h'}
+      process.env.JWT_SECRET, { expiresIn: '24h' }
     );
   }
 }
+
 const User = model("User", UserSchema);
+
 export { User };
