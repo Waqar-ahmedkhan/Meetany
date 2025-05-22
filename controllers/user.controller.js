@@ -76,95 +76,113 @@ async function getUserCurrentStars(userId) {
   }
 }
 
-export const registerUser = async (req, res) => {
-  try {
-    const {
-      name,
-      age,
-      gender,
-      relationship_goal,
-      refferal_code,
-      device_id,
-      device_type,
-      device_token,
-      country,
-      mail
-    } = req.body;
+// export const registerUser = async (req, res) => {
+//   try {
+//     const {
+//       name,
+//       age,
+//       gender,
+//       relationship_goal,
+//       refferal_code,
+//       device_id,
+//       device_type,
+//       device_token,
+//       country,
+//       mail
+//     } = req.body;
 
-    // Validate required fields
-    const requiredFields = { name, age, gender, relationship_goal, device_id, device_type, device_token, country, mail };
-    for (const [field, value] of Object.entries(requiredFields)) {
-      if (!value) {
-        return res.status(400).json({ status: 403, message: `${field} field is required` });
-      }
-    }
+//     // Validate required fields
+//     const requiredFields = { name, age, gender, relationship_goal, device_id, device_type, device_token, country, mail };
+//     for (const [field, value] of Object.entries(requiredFields)) {
+//       if (!value) {
+//         return res.status(400).json({ status: 403, message: `${field} field is required` });
+//       }
+//     }
 
-    // Check if user with device_id exists and clean up data
-    const existingUser = await User.findOne({ device_id });
-    if (existingUser) {
-      const userId = existingUser._id;
+//     // Check if user with this mail already exists
+//     const existingMailUser = await User.findOne({ mail });
+//     if (existingMailUser) {
+//       const token = jwt.sign(
+//         { userId: existingMailUser._id },
+//         process.env.SECRET_KEY,
+//         { expiresIn: '365d' }
+//       );
 
-      await Promise.all([
-        CallHistory.deleteMany({ $or: [{ caller: userId }, { receiver: userId }] }),
-        Block.deleteMany({ $or: [{ user_id: userId }, { blocked_user_id: userId }] }),
-        Report.deleteMany({ $or: [{ user_id: userId }, { reported_user_id: userId }] }),
-        User.deleteOne({ device_id }),
-      ]);
-    }
+//       return res.status(200).json({
+//         status: 200,
+//         message: 'User already exists, token generated',
+//         data: existingMailUser,
+//         token
+//       });
+//     }
 
-    const user_code = await generateUserCode();
+//     // Check if user with device_id exists and clean up data
+//     const existingUser = await User.findOne({ device_id });
+//     if (existingUser) {
+//       const userId = existingUser._id;
 
-    const newUser = new User({
-      name,
-      age,
-      gender,
-      mail,
-      relationship_goal,
-      refferal_code,
-      device_id,
-      device_type,
-      device_token,
-      country,
-      user_type: "user",
-      user_code
-    });
+//       await Promise.all([
+//         CallHistory.deleteMany({ $or: [{ caller: userId }, { receiver: userId }] }),
+//         Block.deleteMany({ $or: [{ user_id: userId }, { blocked_user_id: userId }] }),
+//         Report.deleteMany({ $or: [{ user_id: userId }, { reported_user_id: userId }] }),
+//         User.deleteOne({ device_id }),
+//       ]);
+//     }
 
-    const userRecord = await newUser.save();
+//     const user_code = await generateUserCode();
 
-    // Referral subscription logic
-    if (userRecord.refferal_code) {
-      const referrer = await User.findOne({ user_code: userRecord.refferal_code });
-      if (referrer) {
-        const referralSubscription = new Subscription({
-          type: "referral",
-          cost: 0,
-          stars: 10,
-          user_id: referrer._id,
-          referral_user_id: userRecord._id,
-          planName: null,
-        });
-        await referralSubscription.save();
-      }
-    }
+//     const newUser = new User({
+//       name,
+//       age,
+//       gender,
+//       mail,
+//       relationship_goal,
+//       refferal_code,
+//       device_id,
+//       device_type,
+//       device_token,
+//       country,
+//       user_type: "user",
+//       user_code
+//     });
 
-    const token = jwt.sign(
-      { userId: userRecord._id },
-      process.env.SECRET_KEY,
-      { expiresIn: '365d' }
-    );
+//     const userRecord = await newUser.save();
 
-    return res.status(201).json({
-      status: 200,
-      message: 'User signed up successfully',
-      data: userRecord,
-      token
-    });
+//     // Referral subscription logic
+//     if (userRecord.refferal_code) {
+//       const referrer = await User.findOne({ user_code: userRecord.refferal_code });
+//       if (referrer) {
+//         const referralSubscription = new Subscription({
+//           type: "referral",
+//           cost: 0,
+//           stars: 10,
+//           user_id: referrer._id,
+//           referral_user_id: userRecord._id,
+//           planName: null,
+//         });
+//         await referralSubscription.save();
+//       }
+//     }
 
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ status: 500, message: `Server Error: ${err.message}` });
-  }
-};
+//     const token = jwt.sign(
+//       { userId: userRecord._id },
+//       process.env.SECRET_KEY,
+//       { expiresIn: '365d' }
+//     );
+
+//     return res.status(201).json({
+//       status: 200,
+//       message: 'User signed up successfully',
+//       data: userRecord,
+//       token
+//     });
+
+//   } catch (err) {
+//     console.error(err);
+//     return res.status(500).json({ status: 500, message: `Server Error: ${err.message}` });
+//   }
+// };
+
 
 
 // Sign up new user
@@ -646,28 +664,257 @@ export const setFilterOption = async (req, res) => {
 // controllers/user.controller.js
 
 
+// export const getProfile = async (req, res) => {
+//   try {
+//     const user_id = new mongoose.Types.ObjectId(req.user);
+
+//     // Find the user by ID
+//     const user = await User foundById(user_id).select('-device_token'); // Exclude fields if needed
+    
+//     if (!user) {
+//       return res.status(404).json({ status: 404, message: "User not found." });
+//     }
+    
+//     const totalLikes = await Like.countDocuments({ liked_user_id: user_id });
+
+//     // Get total stars (earned)
+//     const totalStarsResult = await Subscription.aggregate([
+//       {
+//         $match: {
+//           user_id: user_id,
+//           type: { $in: ["subscription", "manual", "referral", "free"] },
+//         },
+//       },
+//       {
+//         $group: {
+//           _id: null,
+//           totalStars: { $sum: "$stars" },
+//         },
+//       },
+//     ]);
+    
+//     const totalStars = totalStarsResult.length ? totalStarsResult[0].totalStars : 0;
+    
+//     // Get spent stars
+//     const filterStarsResult = await Subscription.aggregate([
+//       { 
+//         $match: { 
+//           user_id: user_id, 
+//           type: { $in: ["filter", "filtercall"] } 
+//         }
+//       },
+//       { 
+//         $group: { 
+//           _id: "$user_id", 
+//           filterStars: { $sum: "$stars" } 
+//         }
+//       }
+//     ]);
+
+//     const filterStars = filterStarsResult.length ? filterStarsResult[0].filterStars : 0;
+
+//     // Calculate adjusted total stars
+//     const adjustedTotalStars = totalStars - filterStars;
+    
+//     // Get active subscription
+//     const activeSubscription = await Subscription.findOne({
+//       user_id: user_id,
+//       type: "subscription",
+//       expiry_date: { $gte: new Date() },
+//     }).sort({ expiry_date: -1 });
+     
+//     res.status(200).json({ 
+//       status: 200, 
+//       message: 'User Profile Detail',
+//       user, 
+//       totalLikes, 
+//       totalStars: adjustedTotalStars, 
+//       activeSubscription: activeSubscription || null 
+//     });
+//   } catch (error) {
+//     console.error("Error fetching user profile:", error);
+//     res.status(500).json({ status: 500, message: "Internal server error." });
+//   }
+// };
+
 export const getUserByMail = async (req, res) => {
   try {
     const { mail } = req.params;
 
+    // Validate email presence
     if (!mail) {
       return res.status(400).json({ status: 400, message: 'Email is required.' });
     }
 
-    // Use findOne to get user by mail
+    // Attempt to find the user by email
     const user = await User.findOne({ mail: mail.toLowerCase().trim() }).select('-device_token');
 
-    if (!user) {
-      return res.status(404).json({ status: 404, message: 'User not found.' });
+    // Initialize response fields
+    let totalLikes = null;
+    let adjustedTotalStars = null;
+    let activeSubscription = null;
+    let token = null;
+    let isTokenGenerated = false;
+
+    if (user) {
+      const user_id = user._id;
+
+      // Generate JWT access token
+      token = jwt.sign(
+        { userId: user_id },
+        process.env.SECRET_KEY,
+        { expiresIn: '365d' }
+      );
+      isTokenGenerated = true;
+
+      // Calculate total likes
+      totalLikes = await Like.countDocuments({ liked_user_id: user_id });
+
+      // Calculate total stars earned
+      const totalStarsResult = await Subscription.aggregate([
+        {
+          $match: {
+            user_id: user_id,
+            type: { $in: ["subscription", "manual", "referral", "free"] },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            totalStars: { $sum: "$stars" },
+          },
+        },
+      ]);
+      const totalStars = totalStarsResult.length ? totalStarsResult[0].totalStars : 0;
+
+      // Calculate spent stars
+      const filterStarsResult = await Subscription.aggregate([
+        {
+          $match: {
+            user_id: user_id,
+            type: { $in: ["filter", "filtercall"] },
+          },
+        },
+        {
+          $group: {
+            _id: "$user_id",
+            filterStars: { $sum: "$stars" },
+          },
+        },
+      ]);
+      const filterStars = filterStarsResult.length ? filterStarsResult[0].filterStars : 0;
+
+      // Adjust total stars
+      adjustedTotalStars = totalStars - filterStars;
+
+      // Fetch active subscription
+      activeSubscription = await Subscription.findOne({
+        user_id: user_id,
+        type: "subscription",
+        expiry_date: { $gte: new Date() },
+      }).sort({ expiry_date: -1 });
     }
 
+    // Return 200 status with all fields, token and token flag
     res.status(200).json({
       status: 200,
-      message: 'User fetched successfully.',
-      user
+      message: user ? 'User fetched successfully.' : 'User not found.',
+      user: user || null,
+      totalLikes,
+      totalStars: adjustedTotalStars,
+      activeSubscription: activeSubscription || null,
+      isTokenGenerated,
+      token: token || null,
     });
   } catch (error) {
     console.error('Error fetching user by mail:', error);
     res.status(500).json({ status: 500, message: 'Internal server error.' });
   }
 };
+
+
+
+
+
+
+
+// Get user by email
+// app.get('/api/bymail/:mail', async (req, res) => {
+//   try {
+//     const { mail } = req.params;
+
+//     // Validate email parameter
+//     if (!mail) {
+//       return res.status(400).json({ status: 400, message: 'Email is required.' });
+//     }
+
+//     // Find user, excluding sensitive fields
+//     const user = await User.findOne({ mail: mail.toLowerCase().trim() }).select('-password -device_token');
+//     if (!user) {
+//       return res.status(404).json({ status: 404, message: 'User not found.' });
+//     }
+
+//     const user_id = user._id;
+
+//     // Calculate total likes
+//     const totalLikes = await Like.countDocuments({ liked_user_id: user_id });
+
+//     // Calculate total stars (earned)
+//     const totalStarsResult = await Subscription.aggregate([
+//       {
+//         $match: {
+//           user_id: user_id,
+//           type: { $in: ['subscription', 'manual', 'referral', 'free'] },
+//         },
+//       },
+//       {
+//         $group: {
+//           _id: null,
+//           totalStars: { $sum: '$stars' },
+//         },
+//       },
+//     ]);
+//     const totalStars = totalStarsResult.length ? totalStarsResult[0].totalStars : 0;
+
+//     // Calculate spent stars (filter-related)
+//     const filterStarsResult = await Subscription.aggregate([
+//       {
+//         $match: {
+//           user_id: user_id,
+//           type: { $in: ['filter', 'filtercall'] },
+//         },
+//       },
+//       {
+//         $group: {
+//           _id: '$user_id',
+//           filterStars: { $sum: '$stars' },
+//         },
+//       },
+//     ]);
+//     const filterStars = filterStarsResult.length ? filterStarsResult[0].filterStars : 0;
+
+//     // Adjusted total stars
+//     const adjustedTotalStars = totalStars - filterStars;
+
+//     // Find active subscription
+//     const activeSubscription = await Subscription.findOne({
+//       user_id: user_id,
+//       type: 'subscription',
+//       expiry_date: { $gte: new Date() },
+//     }).sort({ expiry_date: -1 });
+
+//     res.status(200).json({
+//       status: 200,
+//       message: 'User fetched successfully.',
+//       user,
+//       totalLikes,
+//       totalStars: adjustedTotalStars,
+//       activeSubscription: activeSubscription || null,
+//     });
+//   } catch (error) {
+//     console.error('Error fetching user by mail:', error);
+//     res.status(500).json({ status: 500, message: 'Internal server error.' });
+//   }
+// });
+
+// module.exports = app;

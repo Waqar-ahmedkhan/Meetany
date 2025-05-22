@@ -27,13 +27,13 @@ router.post('/upload-image', upload.single('image'), (req, res) => {
 
 // Protected routes (require authentication)
 router.post('/deleteUser', verifyAuthToken, userController.deleteUser);
-router.get('/by-mail/:mail', userController.getUserByMail);
+// router.get('/by-mail/:mail', userController.getUserByMail);
 router.post('/update-profile', verifyAuthToken, userController.updateProfile);
 router.get('/profile', verifyAuthToken, userController.getProfile);
 router.post('/user-profile', verifyAuthToken, userController.getUserProfile);
 router.get('/userlist', verifyAuthToken, userController.getUserList);
 router.post('/filterOption', verifyAuthToken, userController.setFilterOption);
-router.post('/signup-with-mail', userController.registerUser);
+router.post('/signupwithmail', userController.registerUser);
 
 
 
