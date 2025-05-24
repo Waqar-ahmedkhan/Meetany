@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Google Auth Test</title>
+</head>
+<body>
+  <h1>Google Auth Test</h1>
+  <button id="googleLogin">Login with Google</button>
+  <p id="status"></p>
+  <div id="userData"></div>
+  <script>
+    const statusElement = document.getElementById('status');
+    const userDataElement = document.getElementById('userData');
+
+    // Function to initiate Google OAuth
+    document.getElementById('googleLogin').addEventListener('click', () => {
+      console.log('Initiating Google OAuth...');
+      // Optionally include a referral code in the URL
+      const referralCode = ''; // Replace with actual referral code for testing, e.g., 'ABC123'
+      const authUrl = referralCode 
+        ? `http://localhost:3000/api/auth/google?referral_code=${referralCode}`
+        : 'http://localhost:3000/api/auth/google';
+      window.location.href = authUrl;
+    });
+
+    // Function to handle callback response
+    window.addEventListener('load', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const token = urlParams.get('token');
+      const userId = urlParams.get('user_id');
+      const name = urlParams.get('name');
+      const mail = urlParams.get('mail');
+      const userCode = urlParams.get('user_code');
+      const country = urlParams.get('country');
+
+      if (token && userId) {
+        console.log('Auth successful:', { userId, name, mail, userCode, country });
+        statusElement.textContent = 'Status: Google authentication successful';
+        userDataElement.innerHTML = `
+          <h2>User Data:</h2>
+          <p>User ID: ${userId}</p>
+          <p>Name: ${name}</p>
+          <p>Email: ${mail}</p>
+          <p>User Code: ${userCode}</p>
+          <p>Country: ${country || 'Unknown'}</p>
+        `;
+        // Clean up URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+      } else if (window.location.pathname.includes('/api/auth/failure')) {
+        console.log('Auth failed');
+        statusElement.textContent = 'Status: Google authentication failed';
+        window.history.replaceState({}, document.title, '/');
+      } else {
+        console.log('No auth data in URL');
+      }
+    });
+  </script>
+</body>
+</html>

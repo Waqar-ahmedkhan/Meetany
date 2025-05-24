@@ -1,7 +1,8 @@
 import { Schema, model } from 'mongoose';
 import dotenv from 'dotenv';
-dotenv.config();
 import jwt from 'jsonwebtoken';
+
+dotenv.config();
 
 const schemaOptions = {
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
@@ -18,15 +19,15 @@ const UserSchema = new Schema({
     unique: true,
     lowercase: true,
     trim: true,
-    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email address']
+    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email address'],
   },
   age: {
     type: Date,
-    required: true
+    required: true,
   },
   gender: {
     type: String,
-    required: false
+    required: false,
   },
   relationship_goal: {
     type: String,
@@ -42,11 +43,11 @@ const UserSchema = new Schema({
   },
   looking_for: {
     type: String,
-    default: "both",
+    default: 'both',
   },
   user_type: {
     type: String,
-    default: "user",
+    default: 'user',
   },
   image: {
     type: String,
@@ -72,17 +73,21 @@ const UserSchema = new Schema({
     type: String,
     required: false,
   },
+  provider: {
+    type: String,
+    enum: ['google', 'local'],
+    default: 'local',
+  },
+  providerId: {
+    type: String,
+    required: false,
+  },
 }, schemaOptions);
 
-UserSchema.methods = {
-  jwtToken() {
-    return jwt.sign(
-      { id: this._id },
-      process.env.JWT_SECRET, { expiresIn: '24h' }
-    );
-  }
-}
+UserSchema.methods.jwtToken = function () {
+  return jwt.sign({ userId: this._id }, process.env.SECRET_KEY, { expiresIn: '365d' });
+};
 
-const User = model("User", UserSchema);
+const User = model('User', UserSchema);
 
 export { User };

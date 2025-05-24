@@ -7,7 +7,6 @@ import { Like } from "../models/Like.js";
 import { Subscription } from "../models/Subscription.js";
 import mongoose from "mongoose";
 import crypto from "crypto";
-import router from "../routes/userRoutes.js";
 
 // Helper function to generate unique user code
 async function generateUserCode() {
@@ -659,6 +658,18 @@ export const setFilterOption = async (req, res) => {
     console.log(err);
     return res.status(500).send(`Server Error\n${err}`);
   }
+};
+
+// In user.controller.js (add to existing file)
+
+// Find user by email
+export const findUserByEmail = async (email) => {
+  return await User.findOne({ mail: email.toLowerCase().trim() });
+};
+
+// Find user by ID
+export const findUserById = async (id) => {
+  return await User.findById(id);
 };
 
 // controllers/user.controller.js
