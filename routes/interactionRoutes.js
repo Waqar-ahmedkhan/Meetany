@@ -13,8 +13,8 @@ router.post('/report', verifyAuthToken, interactionController.reportUser);
 router.get('/my-reports', verifyAuthToken, interactionController.getMyReports);
 router.delete('/report/:reportId', verifyAuthToken, interactionController.cancelReport);
 
-// router.post('/call/log', verifyAuthToken, interactionController.logCall);
-// router.post('/call/update/:id', verifyAuthToken, interactionController.updateCall);
-// router.get('/call/history', verifyAuthToken, interactionController.getCallHistory);
+router.post('/call/log', verifyAuthToken, interactionController.logCall);
+router.post('/call/update/:id', verifyAuthToken, interactionController.updateCall);
+router.get('/call/history', verifyAuthToken, interactionController.getCallHistory);
 
 export default router;
