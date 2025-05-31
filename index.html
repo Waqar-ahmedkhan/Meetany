@@ -120,11 +120,11 @@
     <div id="videoContainer">
       <div>
         <h3>You</h3>
-        <video id="localVideo" autoplay muted></video>
+        <video id="localVideo" autoplay muted playsinline></video>
       </div>
       <div>
         <h3>Remote</h3>
-        <video id="remoteVideo" autoplay></video>
+        <video id="remoteVideo" autoplay playsinline></video>
       </div>
     </div>
 
@@ -201,11 +201,19 @@
           reconnectionAttempts: 5,
           reconnectionDelay: 1000,
           autoConnect: false,
+          withCredentials: true,
         });
 
-        // Socket event handlers
         state.socket.on("connect", () => {
           updateStatus("Connected to signaling server", "success");
+          if (state.user.id && state.user.name) {
+            state.socket.emit("message", {
+              type: "store_user",
+              uniqueID: state.user.id,
+              name: state.user.name,
+              gender: state.user.gender,
+            });
+          }
         });
 
         state.socket.on("disconnect", () => {
@@ -262,6 +270,10 @@
               displayMessage(data);
               break;
 
+            case "message_error":
+              showError(`Messaging error: ${data.data}`);
+              break;
+
             case "error":
               showError(data.message);
               break;
@@ -287,11 +299,18 @@
           name: data.name,
           gender: data.gender,
         };
+        state.currentCallId = data.callId;
+
+        if (!isValidId(state.remoteUser.id)) {
+          showError("Invalid remote user ID received");
+          state.remoteUser = { id: "", name: "", gender: "" };
+          state.currentCallId = null;
+          return;
+        }
 
         updateStatus(`Connected to ${data.name} (${data.gender})`, "success");
         startCallBtn.disabled = false;
-        messageInput.disabled = false;
-        sendMessageBtn.disabled = false;
+        updateMessagingUI();
       }
 
       // Handle offer received
@@ -317,7 +336,6 @@
             throw new Error(`Failed to set remote description: ${err.message}`);
           }
 
-          // Apply queued ICE candidates
           state.iceCandidates.forEach(async (candidate) => {
             try {
               await state.peerConnection.addIceCandidate(
@@ -334,22 +352,20 @@
           await state.peerConnection.setLocalDescription(answer);
           logMessage("Created answer SDP:", answer.sdp);
 
-          state.socket.emit(
-            "message",
-            JSON.stringify({
-              type: "create_answer",
-              uniqueID: data.callerId,
-              name: state.user.name,
-              data: { sdp: answer.sdp },
-              callId: data.callId,
-            })
-          );
+          state.socket.emit("message", {
+            type: "create_answer",
+            uniqueID: data.callerId,
+            name: state.user.name,
+            data: { sdp: answer.sdp },
+            callId: data.callId,
+          });
 
-          state.currentCallId = data.callId;
+          state.currentCallId = data.callId; // Update callId
           startCallBtn.disabled = true;
           endCallBtn.disabled = false;
           updateStatus(`Call started with ${data.name}`, "success");
           updateCallStatus("Active call");
+          updateMessagingUI();
         } catch (error) {
           console.error("Error handling offer:", error);
           showError(`Failed to handle call offer: ${error.message}`);
@@ -369,9 +385,12 @@
             new RTCSessionDescription({ sdp: data.data, type: "answer" })
           );
 
-          state.currentCallId = data.callId;
+          state.currentCallId = data.callId; // Update callId
+          startCallBtn.disabled = true;
+          endCallBtn.disabled = false;
           updateStatus("Call connected", "success");
           updateCallStatus("Active call");
+          updateMessagingUI();
         } catch (error) {
           console.error("Error handling answer:", error);
           showError("Failed to handle call answer");
@@ -416,7 +435,7 @@
         const sender =
           data.senderId === state.user.id
             ? "You"
-            : state.remoteUser.name || "Other";
+            : data.senderName || state.remoteUser.name || "Other";
         appendMessage(`[${time}] ${sender}: ${data.content}`);
       }
 
@@ -434,7 +453,7 @@
 
           if (!isValidId(state.user.id)) {
             showError(
-              "User ID must be a valid format (24-character hex string)"
+              "User ID must be a valid MongoDB ObjectId (24-character hex string)"
             );
             return;
           }
@@ -446,19 +465,8 @@
           }
 
           state.socket.connect();
-
-          state.socket.emit(
-            "message",
-            JSON.stringify({
-              type: "store_user",
-              uniqueID: state.user.id,
-              name: state.user.name,
-              gender: state.user.gender,
-            })
-          );
-
           state.user.connected = true;
-          updateStatus("User registered, waiting for connection...", "success");
+          updateStatus("Connecting to server...", "success");
         } catch (error) {
           console.error("Error connecting user:", error);
           showError("Failed to connect user");
@@ -493,7 +501,8 @@
             uniqueID: state.remoteUser.id,
             callerId: state.user.id,
             targetId: state.remoteUser.id,
-            data: { sdp: offer.sdp }, // Ensure sdp is sent as a string
+            data: { sdp: offer.sdp },
+            callId: state.currentCallId,
           });
 
           startCallBtn.disabled = true;
@@ -516,15 +525,12 @@
           }
 
           if (state.remoteUser.id) {
-            state.socket.emit(
-              "message",
-              JSON.stringify({
-                type: "end_call",
-                uniqueID: state.remoteUser.id,
-                name: state.user.name,
-                gender: state.user.gender,
-              })
-            );
+            state.socket.emit("message", {
+              type: "end_call",
+              uniqueID: state.remoteUser.id,
+              name: state.user.name,
+              gender: state.user.gender,
+            });
           }
 
           resetCall();
@@ -540,23 +546,36 @@
       function sendMessage() {
         try {
           const content = messageInput.value.trim();
-          if (!content || !state.remoteUser.id || !state.currentCallId) return;
+          if (!content) {
+            showError("Message cannot be empty");
+            return;
+          }
+          if (!state.remoteUser.id) {
+            showError("No remote user connected");
+            return;
+          }
+          if (!state.currentCallId) {
+            showError("No active call");
+            return;
+          }
+          if (!isValidId(state.remoteUser.id) || !isValidId(state.user.id)) {
+            showError("Invalid user or remote user ID");
+            return;
+          }
 
-          state.socket.emit(
-            "message",
-            JSON.stringify({
-              type: "send_message",
-              callId: state.currentCallId,
-              content,
-              senderId: state.user.id,
-              receiverId: state.remoteUser.id,
-            })
-          );
+          state.socket.emit("message", {
+            type: "send_message",
+            callId: state.currentCallId,
+            content,
+            senderId: state.user.id,
+            receiverId: state.remoteUser.id,
+            uniqueID: state.remoteUser.id, // Fallback for server compatibility
+          });
 
           messageInput.value = "";
         } catch (error) {
           console.error("Error sending message:", error);
-          showError("Failed to send message");
+          showError("Failed to send message: " + error.message);
         }
       }
 
@@ -589,19 +608,16 @@
           };
           state.peerConnection.onicecandidate = (event) => {
             if (event.candidate && state.remoteUser.id) {
-              state.socket.emit(
-                "message",
-                JSON.stringify({
-                  type: "ice_candidate",
-                  uniqueID: state.remoteUser.id,
-                  name: state.user.name,
-                  data: {
-                    sdpMLineIndex: event.candidate.sdpMLineIndex,
-                    sdpMid: event.candidate.sdpMid,
-                    sdpCandidate: event.candidate.candidate,
-                  },
-                })
-              );
+              state.socket.emit("message", {
+                type: "ice_candidate",
+                uniqueID: state.remoteUser.id,
+                name: state.user.name,
+                data: {
+                  sdpMLineIndex: event.candidate.sdpMLineIndex,
+                  sdpMid: event.candidate.sdpMid,
+                  sdpCandidate: event.candidate.candidate,
+                },
+              });
               logMessage("Sent ICE candidate:", event.candidate.candidate);
             }
           };
@@ -611,7 +627,7 @@
             logMessage("ICE connection state:", stateVal);
             if (stateVal === "failed") {
               console.error("ICE connection failed");
-              state.peerConnection.restartIce(); // Attempt to recover
+              state.peerConnection.restartIce();
               showError("ICE connection failed, attempting to recover...");
             }
           };
@@ -625,7 +641,6 @@
             }
           };
 
-          // Prefer specific codecs
           state.peerConnection.getTransceivers().forEach((transceiver) => {
             if (transceiver.sender.track.kind === "video") {
               const codecs = RTCRtpSender.getCapabilities("video").codecs;
@@ -648,6 +663,13 @@
           console.error("Error creating peer connection:", error);
           throw error;
         }
+      }
+
+      // Update messaging UI based on state
+      function updateMessagingUI() {
+        const enabled = state.currentCallId && state.remoteUser.id;
+        messageInput.disabled = !enabled;
+        sendMessageBtn.disabled = !enabled;
       }
 
       // Helper Functions
@@ -697,10 +719,9 @@
         remoteVideo.srcObject = null;
         startCallBtn.disabled = !state.remoteUser.id;
         endCallBtn.disabled = true;
-        messageInput.disabled = true;
-        sendMessageBtn.disabled = true;
         state.currentCallId = null;
         state.iceCandidates = [];
+        updateMessagingUI();
       }
 
       function resetConnection() {
@@ -712,11 +733,13 @@
         }
         if (state.socket) {
           state.socket.disconnect();
+          state.socket = null;
         }
         state.user.connected = false;
         state.remoteUser = { id: "", name: "", gender: "" };
         startCallBtn.disabled = true;
         updateStatus("Not connected");
+        updateMessagingUI();
       }
 
       // Initialize

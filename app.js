@@ -91,7 +91,13 @@ app.get("/", (req, res) => {
 const server = http.createServer(app);
 
 // Initialize Socket.IO
-const io = new SocketIO(server);
+const io = new SocketIO(server, {
+  cors: {
+    origin: "http://localhost:3000",
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+});
 
 const users = [];
 let ongoingCalls = [];
@@ -234,8 +240,9 @@ const createSubscription = async (userId, referralUserId, planName) => {
 };
 
 const findAvailableUser = async (currentUserId, currentUserGender) => {
-  console.log("currentUserId +++", currentUserId);
-  if (currentUserId === "") {
+  console.log("Finding available user for:", currentUserId);
+  if (!mongoose.Types.ObjectId.isValid(currentUserId)) {
+    console.error("Invalid currentUserId:", currentUserId);
     return null;
   }
   const preSubscribe = await Subscription.findOne({
@@ -265,32 +272,46 @@ const findUser = (uniqueID) => {
   return users.find((user) => user.uniqueID === uniqueID);
 };
 
-// Socket.IO logic
 io.on("connection", (socket) => {
-  console.log("new connection>>>", socket.id);
+  console.log("New connection:", socket.id);
 
   socket.on("message", async (message) => {
-    console.log("new message>>>", message);
+    console.log("Received message:", message);
     let data;
     try {
       if (typeof message === "string") {
         data = JSON.parse(message);
       } else {
-        data = message; // Message is already an object
+        data = message;
       }
     } catch (err) {
       console.error("Invalid message format:", message);
+      socket.emit("message", {
+        type: "error",
+        message: "Invalid message format",
+      });
       return;
     }
-    console.log("parse message>>>", data);
-    const user = findUser(data.uniqueID);
+
+    // Skip uniqueID validation for send_message
+    if (data.type !== "send_message") {
+      if (!data.uniqueID || !mongoose.Types.ObjectId.isValid(data.uniqueID)) {
+        console.error("Invalid or missing uniqueID:", data.uniqueID);
+        socket.emit("message", {
+          type: "error",
+          message: "Invalid or missing uniqueID",
+        });
+        return;
+      }
+    }
 
     switch (data.type) {
       case "store_user":
-        console.log("new store_user>>>");
-        if (user) {
+        console.log("Handling store_user");
+        if (findUser(data.uniqueID)) {
           socket.emit("message", {
-            type: "user already exists",
+            type: "user_already_exists",
+            message: "User already exists",
           });
           return;
         }
@@ -301,21 +322,28 @@ io.on("connection", (socket) => {
           gender: data.gender,
         };
         users.push(newUser);
-        const availableUser = await findAvailableUser(
-          data.uniqueID,
-          data.gender
-        );
-        console.log("availableUser>>>", availableUser);
+        console.log("User stored:", newUser);
+        const availableUser = await findAvailableUser(data.uniqueID, data.gender);
+        const callId = new mongoose.Types.ObjectId().toString();
         if (availableUser) {
           ongoingCalls.push({
             caller: data.uniqueID,
             receiver: availableUser.uniqueID,
+            callId,
           });
           socket.emit("message", {
             type: "call_connected",
             data: availableUser.uniqueID,
             name: availableUser.name,
             gender: availableUser.gender,
+            callId,
+          });
+          io.to(availableUser.id).emit("message", {
+            type: "call_connected",
+            data: data.uniqueID,
+            name: data.name,
+            gender: data.gender,
+            callId,
           });
         } else {
           socket.emit("message", {
@@ -323,104 +351,30 @@ io.on("connection", (socket) => {
             data: "No available user for the call",
             name: "",
             gender: "",
+            callId: null,
           });
         }
         break;
 
       case "start_call":
-        console.log("new start_call>>>");
-        let userToCall = findUser(data.uniqueID);
+        console.log("Handling start_call");
+        const userToCall = findUser(data.uniqueID);
         if (userToCall) {
           socket.emit("message", {
             type: "call_response",
-            data: "user is ready for call",
+            data: "User is ready for call",
           });
         } else {
           socket.emit("message", {
             type: "call_response",
-            data: "user is not online",
+            data: "User is not online",
           });
         }
         break;
 
-      // case 'create_offer':
-      //   console.log('new create_offer>>>');
-      //   let userToReceiveOffer = findUser(data.uniqueID);
-      //   const callLog = new CallHistory({
-      //     caller: data.callerId,
-      //     receiver: data.targetId,
-      //     status: 'missed',
-      //   });
-      //   const call = await callLog.save();
-      //   console.log('userToReceiveOffer>>>', userToReceiveOffer);
-      //   if (userToReceiveOffer) {
-      //     console.log('enter>>>');
-      //     io.to(userToReceiveOffer.id).emit('message', {
-      //       type: 'offer_received',
-      //       name: userToReceiveOffer.name,
-      //       uniqueID: userToReceiveOffer.uniqueID,
-      //       callerId: data.callerId,
-      //       data: data.data.sdp,
-      //       callId: call._id,
-      //     });
-      //   }
-      //   break;
-      // case "create_offer":
-      //   console.log("new create_offer>>>");
-      //   let userToReceiveOffer = findUser(data.uniqueID);
-
-      //   // Validate both callerId and targetId
-      //   if (!mongoose.Types.ObjectId.isValid(data.callerId)) {
-      //     console.error("Invalid callerId:", data.callerId);
-      //     socket.emit("message", {
-      //       type: "error",
-      //       message: "Invalid caller ID format",
-      //     });
-      //     return;
-      //   }
-
-      //   if (!mongoose.Types.ObjectId.isValid(data.targetId)) {
-      //     console.error("Invalid targetId:", data.targetId);
-      //     socket.emit("message", {
-      //       type: "error",
-      //       message: "Invalid receiver ID format",
-      //     });
-      //     return;
-      //   }
-
-      //   try {
-      //     const callLog = new CallHistory({
-      //       caller: new mongoose.Types.ObjectId(data.callerId),
-      //       receiver: new mongoose.Types.ObjectId(data.targetId),
-      //       status: "missed",
-      //     });
-
-      //     const call = await callLog.save();
-      //     console.log("Call log saved:", call._id);
-
-      //     if (userToReceiveOffer) {
-      //       io.to(userToReceiveOffer.id).emit("message", {
-      //         type: "offer_received",
-      //         name: userToReceiveOffer.name,
-      //         uniqueID: userToReceiveOffer.uniqueID,
-      //         callerId: data.callerId,
-      //         data: data.data.sdp,
-      //         callId: call._id,
-      //       });
-      //     }
-      //   } catch (err) {
-      //     console.error("Error saving call log:", err);
-      //     socket.emit("message", {
-      //       type: "error",
-      //       message: "Failed to initiate call",
-      //       details: err.message,
-      //     });
-      //   }
-      //   break;
       case "create_offer":
-        console.log("new create_offer>>>");
-        let userToReceiveOffer = findUser(data.uniqueID);
-
+        console.log("Handling create_offer");
+        const userToReceiveOffer = findUser(data.uniqueID);
         if (!mongoose.Types.ObjectId.isValid(data.callerId)) {
           console.error("Invalid callerId:", data.callerId);
           socket.emit("message", {
@@ -429,7 +383,6 @@ io.on("connection", (socket) => {
           });
           return;
         }
-
         if (!mongoose.Types.ObjectId.isValid(data.targetId)) {
           console.error("Invalid targetId:", data.targetId);
           socket.emit("message", {
@@ -438,7 +391,6 @@ io.on("connection", (socket) => {
           });
           return;
         }
-
         if (!data.data || !data.data.sdp || typeof data.data.sdp !== "string") {
           console.error("Invalid or missing SDP:", data.data);
           socket.emit("message", {
@@ -447,25 +399,22 @@ io.on("connection", (socket) => {
           });
           return;
         }
-
         try {
           const callLog = new CallHistory({
             caller: new mongoose.Types.ObjectId(data.callerId),
             receiver: new mongoose.Types.ObjectId(data.targetId),
             status: "missed",
+            callId: data.callId, // Use provided callId
           });
-
           const call = await callLog.save();
-          console.log("Call log saved:", call._id);
-
           if (userToReceiveOffer) {
             io.to(userToReceiveOffer.id).emit("message", {
               type: "offer_received",
               name: userToReceiveOffer.name,
               uniqueID: userToReceiveOffer.uniqueID,
               callerId: data.callerId,
-              data: data.data.sdp, // Relay sdp as a string
-              callId: call._id,
+              data: data.data.sdp,
+              callId: data.callId, // Use consistent callId
             });
           } else {
             socket.emit("message", {
@@ -484,71 +433,78 @@ io.on("connection", (socket) => {
         break;
 
       case "create_answer":
-        console.log("new create_answer>>>");
-        let userToReceiveAnswer = findUser(data.uniqueID);
-        console.log("userToReceiveAnswer>>>", userToReceiveAnswer);
-        console.log("data>>>", data);
-        if (userToReceiveAnswer) {
-          console.log("calls complete");
-          const isInCall = ongoingCalls.find(
-            (call) =>
-              call.caller === data.uniqueID || call.receiver === data.uniqueID
-          );
-          if (isInCall) {
-            console.log("while answer ++ ", isInCall);
-            let callerGender = findUser(isInCall.caller);
-            console.log("callerGender ++ ", callerGender);
-            let receiverGender = findUser(isInCall.receiver);
-            console.log("receiverGender ++ ", receiverGender);
-            const caller = await Subscription.findOne({
-              type: "filter",
-              user_id: isInCall.caller,
-            });
-            if (
-              caller &&
-              caller.planName !== "both" &&
-              receiverGender.gender !== "both" &&
-              caller.planName === receiverGender.gender
-            ) {
-              await createSubscription(
-                isInCall.caller,
-                isInCall.receiver,
-                caller.planName
-              );
-            }
-            const receiver = await Subscription.findOne({
-              type: "filter",
-              user_id: isInCall.receiver,
-            });
-            if (
-              receiver &&
-              receiver.planName !== "both" &&
-              callerGender.gender !== "both" &&
-              receiver.planName === callerGender.gender
-            ) {
-              await createSubscription(
-                isInCall.receiver,
-                isInCall.caller,
-                receiver.planName
-              );
-            }
-            // Update CallHistory status to connected
-            await CallHistory.findByIdAndUpdate(data.callId, {
-              status: "connected",
-            });
-          }
-          io.to(userToReceiveAnswer.id).emit("message", {
-            type: "answer_received",
-            name: data.name,
-            data: data.data.sdp,
-            callId: data.callId,
+        console.log("Handling create_answer");
+        const userToReceiveAnswer = findUser(data.uniqueID);
+        if (!userToReceiveAnswer) {
+          socket.emit("message", {
+            type: "error",
+            message: "Receiver is not online",
           });
+          return;
         }
+        if (!data.data || !data.data.sdp || typeof data.data.sdp !== "string") {
+          console.error("Invalid or missing SDP:", data.data);
+          socket.emit("message", {
+            type: "error",
+            message: "Invalid or missing SDP in answer",
+          });
+          return;
+        }
+        const isInCall = ongoingCalls.find(
+          (call) =>
+            call.caller === data.uniqueID || call.receiver === data.uniqueID
+        );
+        if (isInCall) {
+          const callerGender = findUser(isInCall.caller);
+          const receiverGender = findUser(isInCall.receiver);
+          const caller = await Subscription.findOne({
+            type: "filter",
+            user_id: isInCall.caller,
+          });
+          if (
+            caller &&
+            caller.planName !== "both" &&
+            receiverGender?.gender !== "both" &&
+            caller.planName === receiverGender?.gender
+          ) {
+            await createSubscription(
+              isInCall.caller,
+              isInCall.receiver,
+              caller.planName
+            );
+          }
+          const receiver = await Subscription.findOne({
+            type: "filter",
+            user_id: isInCall.receiver,
+          });
+          if (
+            receiver &&
+            receiver.planName !== "both" &&
+            callerGender?.gender !== "both" &&
+            receiver.planName === callerGender?.gender
+          ) {
+            await createSubscription(
+              isInCall.receiver,
+              isInCall.caller,
+              receiver.planName
+            );
+          }
+          await CallHistory.findOneAndUpdate(
+            { callId: data.callId },
+            { status: "connected" }
+          );
+        }
+        io.to(userToReceiveAnswer.id).emit("message", {
+          type: "answer_received",
+          name: data.name,
+          data: data.data.sdp,
+          callId: data.callId,
+        });
         break;
 
       case "ice_candidate":
-        console.log("new ice_candidate>>>", data);
-        let userToReceiveIceCandidate = findUser(data.uniqueID);
+        console.log("Handling ice_candidate:", data);
+        const userToReceiveIceCandidate = findUser(data.uniqueID);
         if (userToReceiveIceCandidate) {
           io.to(userToReceiveIceCandidate.id).emit("message", {
             type: "ice_candidate",
@@ -560,7 +516,7 @@ io.on("connection", (socket) => {
             },
           });
         } else {
-          console.log("User not found for ICE candidate:", data.uniqueID);
+          console.error("User not found for ICE candidate:", data.uniqueID);
           socket.emit("message", {
             type: "error",
             message: "Receiver not online for ICE candidate",
@@ -569,90 +525,134 @@ io.on("connection", (socket) => {
         break;
 
       case "end_call":
-        console.log("new end_call>>>");
-        let userToEndCall = findUser(data.uniqueID);
+        console.log("Handling end_call");
+        const userToEndCall = findUser(data.uniqueID);
         if (userToEndCall) {
           io.to(userToEndCall.id).emit("message", {
             type: "call_ended",
             name: data.name,
-            data: "call ended",
+            data: "Call ended",
           });
         }
         const callIndex = ongoingCalls.findIndex(
           (call) =>
-            (call.caller === data.uniqueID &&
-              call.receiver === data.uniqueID) ||
-            (call.receiver === data.uniqueID && call.caller === data.uniqueID)
+            call.caller === data.uniqueID || call.receiver === data.uniqueID
         );
-        if (callIndex !== -1) ongoingCalls.splice(callIndex, 1);
+        if (callIndex !== -1) {
+          const call = ongoingCalls[callIndex];
+          await CallHistory.findOneAndUpdate(
+            { callId: call.callId },
+            { status: "ended" }
+          );
+          ongoingCalls.splice(callIndex, 1);
+        }
         const nextAvailableUser = await findAvailableUser(
           data.uniqueID,
           data.gender
         );
+        const nextCallId = new mongoose.Types.ObjectId().toString();
         if (!nextAvailableUser) {
           socket.emit("message", {
             type: "call_connected",
             data: "No available user for the next call",
+            name: "",
+            gender: "",
+            callId: null,
           });
         } else {
           ongoingCalls.push({
             caller: data.uniqueID,
             receiver: nextAvailableUser.uniqueID,
+            callId: nextCallId,
           });
           socket.emit("message", {
             type: "call_connected",
             data: nextAvailableUser.uniqueID,
             name: nextAvailableUser.name,
             gender: nextAvailableUser.gender,
+            callId: nextCallId,
+          });
+          io.to(nextAvailableUser.id).emit("message", {
+            type: "call_connected",
+            data: data.uniqueID,
+            name: data.name,
+            gender: data.gender,
+            callId: nextCallId,
           });
         }
         break;
 
       case "send_message":
-        console.log("new send_message>>>", data);
-        const { callId, content, senderId, receiverId } = data;
-        const isInCall = ongoingCalls.find(
+        console.log("Handling send_message:", data);
+        const { callId: messageCallId, content, senderId, receiverId } = data;
+        if (!mongoose.Types.ObjectId.isValid(senderId) || !mongoose.Types.ObjectId.isValid(receiverId)) {
+          console.error("Invalid senderId or receiverId:", { senderId, receiverId });
+          socket.emit("message", {
+            type: "message_error",
+            data: "Invalid sender or receiver ID",
+          });
+          return;
+        }
+        if (!messageCallId || !content) {
+          console.error("Missing callId or content:", { callId: messageCallId, content });
+          socket.emit("message", {
+            type: "message_error",
+            data: "Missing call ID or message content",
+          });
+          return;
+        }
+        const sender = findUser(senderId);
+        const receiver = findUser(receiverId);
+        if (!sender || sender.id !== socket.id) {
+          console.error("Sender not found or socket mismatch:", senderId);
+          socket.emit("message", {
+            type: "message_error",
+            data: "Sender not found or unauthorized",
+          });
+          return;
+        }
+        const isInCallForMessage = ongoingCalls.find(
           (call) =>
             (call.caller === senderId && call.receiver === receiverId) ||
             (call.caller === receiverId && call.receiver === senderId)
         );
-        if (!isInCall) {
+        if (!isInCallForMessage || isInCallForMessage.callId !== messageCallId) {
+          console.error("No active call found or callId mismatch:", { senderId, receiverId, callId: messageCallId });
           socket.emit("message", {
             type: "message_error",
-            data: "No active call found for these users",
+            data: "No active call found or invalid call ID",
           });
           return;
         }
-        const receiver = findUser(receiverId);
         if (!receiver) {
+          console.error("Receiver not online:", receiverId);
           socket.emit("message", {
             type: "message_error",
             data: "Receiver is not online",
           });
           return;
         }
-        // Save message to database
         try {
           const message = new Message({
-            call_id: callId,
+            call_id: new mongoose.Types.ObjectId(messageCallId),
             sender_id: senderId,
             receiver_id: receiverId,
             content,
           });
           await message.save();
-          // Relay message to receiver
           io.to(receiver.id).emit("message", {
             type: "message_received",
-            callId,
+            callId: messageCallId,
             senderId,
+            senderName: sender.name,
             content,
             timestamp: message.timestamp,
           });
-          // Confirm message sent to sender
           socket.emit("message", {
             type: "message_sent",
-            callId,
+            callId: messageCallId,
             senderId,
+            senderName: sender.name,
             content,
             timestamp: message.timestamp,
           });
@@ -661,29 +661,54 @@ io.on("connection", (socket) => {
           socket.emit("message", {
             type: "message_error",
             data: "Failed to send message",
+            details: error.message,
           });
         }
         break;
+
+      default:
+        console.error("Unknown message type:", data.type);
+        socket.emit("message", {
+          type: "error",
+          message: "Unknown message type",
+        });
     }
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", async () => {
     const userIndex = users.findIndex((user) => user.id === socket.id);
     let disconnectedUser = null;
     if (userIndex !== -1) {
       disconnectedUser = users.splice(userIndex, 1)[0];
     }
-    ongoingCalls = ongoingCalls.filter(
+    const callIndex = ongoingCalls.findIndex(
       (call) =>
-        call.caller !== disconnectedUser?.uniqueID &&
-        call.receiver !== disconnectedUser?.uniqueID
+        call.caller === disconnectedUser?.uniqueID ||
+        call.receiver === disconnectedUser?.uniqueID
     );
+    if (callIndex !== -1) {
+      const call = ongoingCalls[callIndex];
+      const partnerId = call.caller === disconnectedUser?.uniqueID ? call.receiver : call.caller;
+      const partner = findUser(partnerId);
+      if (partner) {
+        io.to(partner.id).emit("message", {
+          type: "call_ended",
+          name: disconnectedUser?.name || "Unknown",
+          data: "User disconnected",
+        });
+      }
+      await CallHistory.findOneAndUpdate(
+        { callId: call.callId },
+        { status: "ended" }
+      );
+      ongoingCalls.splice(callIndex, 1);
+    }
     console.log(
       `Cleaned up: Removed user ${
         disconnectedUser?.name || "unknown"
       } from users and ongoing calls.`
     );
-    console.log("connection closed:", socket.id);
+    console.log("Connection closed:", socket.id);
   });
 });
 
